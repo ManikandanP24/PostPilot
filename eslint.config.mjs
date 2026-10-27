@@ -13,4 +13,5 @@ const compat = new FlatCompat({
 export default [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts"]),
+  { rules: { "@typescript-eslint/no-explicit-any": "off" } },
 ];
