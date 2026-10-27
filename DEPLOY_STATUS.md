@@ -1,21 +1,12 @@
-# PostPilot upload/deployment status
+# PostPilot deployment status
 
-The complete Next.js + Supabase app source, including `render.yaml`, is bundled in the downloadable project ZIP. This repository's GitHub integration could not complete the bulk upload in the current session, and a local `git push` failed because the runtime could not resolve `github.com`. Do not deploy the current partially uploaded branch: the publishing dispatcher currently in GitHub is a placeholder.
+Updated 2026-10-27.
 
-## Finish the upload
-Extract the full ZIP locally and from its `PostPilot` directory run:
+- **GitHub source:** the application source is present on `main` at https://github.com/ManikandanP24/PostPilot.
+- **Render service:** deployed and live at https://postpilot-dx6r.onrender.com.
+- **Render dashboard:** https://dashboard.render.com/web/srv-dbgag5uc6qcc73ermofg.
+- **Database:** run `supabase/schema.sql` in your Supabase project.
+- **Required secrets:** add `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `META_APP_ID`, `META_APP_SECRET`, `LINKEDIN_CLIENT_ID`, and `LINKEDIN_CLIENT_SECRET` in Render's Environment settings. OAuth callback URLs are already set to the Render host; make the same URLs match in the Meta and LinkedIn developer consoles.
+- **Scheduler:** the web endpoint is implemented, but a recurring Render Cron Job has not yet been created. Render Cron Jobs have a $1/month minimum plus runtime usage; obtain approval before adding this paid resource.
 
-```bash
-git remote add origin https://github.com/ManikandanP24/PostPilot.git
-git fetch origin
-git checkout -B main
-git add .
-git commit -m "Add full PostPilot application" || true
-git push -u origin main
-```
-
-Because the remote currently contains an incomplete initial commit, Git may reject the push as non-fast-forward. The safest option is to push to a new branch and create a PR, or consciously replace the incomplete branch after reviewing its contents. Do not use `--force` unless you intend to overwrite the current remote history.
-
-## Deploy on Render
-
-After the complete source is on GitHub: https://render.com → **New + → Blueprint** → choose `ManikandanP24/PostPilot` → apply `render.yaml`. Enter environment secrets through Render, update the Render URL in app/OAuth settings, run `supabase/schema.sql` in Supabase SQL Editor, and configure a separate Render Cron Job/external scheduler because `vercel.json` Cron is Vercel-specific.
+The production build has passed on Render. Social posting is not fully operational until the external credentials are provided and account permissions approved.
