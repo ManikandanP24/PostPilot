@@ -1,16 +1,9 @@
-# Uploading the complete source
+# PostPilot source upload status
 
-The full PostPilot source bundle is provided in the project ZIP generated for this task. The GitHub connector did not reliably accept the bulk file upload in this run; the repository currently contains setup/deployment files only and is not yet a complete buildable app.
+The full PostPilot application source is now present on the `main` branch. No manual source upload is needed.
 
-Extract the ZIP locally, then from the extracted `PostPilot` directory run:
+- Repository: https://github.com/ManikandanP24/PostPilot
+- Render app: https://postpilot-dx6r.onrender.com
+- Render setup: [RENDER_DEPLOY.md](./RENDER_DEPLOY.md)
 
-```bash
-git init
-git branch -M main
-git remote add origin https://github.com/ManikandanP24/PostPilot.git
-git add .
-git commit -m "Add full PostPilot application"
-git push -u origin main
-```
-
-If the repository already has an initial commit, first fetch and merge its `main` branch, or use a fresh branch and PR instead of overwriting history.
+Before using authentication or social publishing, configure the required Supabase, Meta, and LinkedIn credentials in Render and run `supabase/schema.sql` in Supabase SQL Editor. Scheduled publishing also needs a Render Cron Job or another recurring scheduler calling the protected `/api/cron/publish` endpoint.
