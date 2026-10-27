@@ -1,0 +1,3 @@
+import { Instagram, Facebook, Linkedin } from "lucide-react";
+const info={instagram:{label:"Instagram",color:"text-pink-600",Icon:Instagram},facebook:{label:"Facebook",color:"text-blue-600",Icon:Facebook},linkedin:{label:"LinkedIn",color:"text-sky-700",Icon:Linkedin}} as const;
+export default function PlatformBadges({platforms}:{platforms:string[]}){return <div className="flex flex-wrap gap-2">{platforms.map((p)=>{const item=info[p as keyof typeof info];return item?<span key={p} className={`inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium ${item.color}`}><item.Icon size={13}/>{item.label}</span>:null})}</div>}
