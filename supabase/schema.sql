@@ -1,29 +1,194 @@
+-- PostPilot database schema. Run in Supabase SQL Editor as project owner.
 create extension if not exists pgcrypto;
-create type public.social_platform as enum ('instagram','facebook','linkedin');
-create type public.post_status as enum ('draft','queued','processing','published','failed');
-create type public.target_status as enum ('queued','processing','published','failed');
-create table public.workspaces (id uuid primary key default gen_random_uuid(), owner_id uuid not null unique references auth.users(id) on delete cascade, name text not null default 'My Workspace', timezone text not null default 'Asia/Kolkata', created_at timestamptz not null default now());
-create table public.social_accounts (id uuid primary key default gen_random_uuid(), workspace_id uuid not null references public.workspaces(id) on delete cascade, platform public.social_platform not null, external_account_id text not null, account_name text not null, access_token_encrypted text not null, refresh_token_encrypted text, token_expires_at timestamptz, scopes text[] not null default '{}', metadata jsonb not null default '{}', created_at timestamptz not null default now(), updated_at timestamptz not null default now(), unique(workspace_id, platform, external_account_id));
-create table public.media_assets (id uuid primary key default gen_random_uuid(), workspace_id uuid not null references public.workspaces(id) on delete cascade, storage_path text not null, public_url text not null, kind text not null check (kind in ('image','audio','video')), mime_type text not null, size_bytes bigint not null check (size_bytes > 0), width integer, height integer, created_at timestamptz not null default now());
-create table public.posts (id uuid primary key default gen_random_uuid(), workspace_id uuid not null references public.workspaces(id) on delete cascade, created_by uuid not null references auth.users(id), media_asset_id uuid references public.media_assets(id) on delete set null, audio_asset_id uuid references public.media_assets(id) on delete set null, video_asset_id uuid references public.media_assets(id) on delete set null, instagram_caption text not null default '', linkedin_caption text not null default '', facebook_caption text, platforms public.social_platform[] not null default '{}', status public.post_status not null default 'draft', scheduled_at timestamptz, timezone text not null default 'Asia/Kolkata', add_music boolean not null default false, hide_like_count boolean not null default false, also_post_to_facebook boolean not null default false, checklist jsonb not null default '[]', error_message text, created_at timestamptz not null default now(), updated_at timestamptz not null default now(), published_at timestamptz);
-create table public.post_targets (id uuid primary key default gen_random_uuid(), post_id uuid not null references public.posts(id) on delete cascade, platform public.social_platform not null, status public.target_status not null default 'queued', external_post_id text, post_url text, error_message text, retry_count integer not null default 0, published_at timestamptz, updated_at timestamptz not null default now(), unique(post_id, platform));
-create index posts_due_idx on public.posts(status, scheduled_at) where status = 'queued';
-create index post_targets_post_idx on public.post_targets(post_id);
-create or replace function public.create_workspace_for_new_user() returns trigger language plpgsql security definer set search_path = public as $$ begin insert into public.workspaces(owner_id, name) values(new.id, coalesce(new.raw_user_meta_data->>'workspace_name','My Workspace')) on conflict(owner_id) do nothing; return new; end; $$;
-create trigger on_auth_user_created_workspace after insert on auth.users for each row execute procedure public.create_workspace_for_new_user();
-create or replace function public.claim_due_posts(batch_size integer default 1) returns table(id uuid) language plpgsql security definer set search_path = public as $$ begin return query with due as (select p.id from public.posts p where p.status='queued' and p.scheduled_at <= now() order by p.scheduled_at for update skip locked limit greatest(1, least(batch_size,10))), claimed as (update public.posts p set status='processing', updated_at=now() from due where p.id=due.id returning p.id) select claimed.id from claimed; end; $$;
+
+do $$ begin
+  create type public.social_platform as enum ('instagram', 'facebook', 'linkedin');
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create type public.post_status as enum ('draft', 'scheduled', 'queued', 'processing', 'published', 'partial', 'failed');
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create type public.target_status as enum ('queued', 'processing', 'published', 'failed', 'skipped');
+exception when duplicate_object then null; end $$;
+
+create table if not exists public.workspaces (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null unique references auth.users(id) on delete cascade,
+  name text not null default 'My workspace',
+  timezone text not null default 'Asia/Kolkata',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.social_accounts (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
+  platform public.social_platform not null,
+  account_id text,
+  account_name text,
+  page_id text,
+  instagram_user_id text,
+  access_token_enc text,
+  refresh_token_enc text,
+  token_expires_at timestamptz,
+  scopes text[] not null default '{}',
+  metadata jsonb not null default '{}',
+  connected_at timestamptz,
+  last_checked_at timestamptz,
+  last_error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (workspace_id, platform)
+);
+
+create table if not exists public.media_assets (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
+  storage_path text not null unique,
+  public_url text not null,
+  media_kind text not null check (media_kind in ('image', 'audio', 'video')),
+  mime_type text not null,
+  size_bytes bigint not null default 0,
+  width integer,
+  height integer,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.posts (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
+  created_by uuid not null references auth.users(id) on delete cascade,
+  title text not null default 'Untitled post',
+  image_asset_id uuid references public.media_assets(id) on delete set null,
+  video_asset_id uuid references public.media_assets(id) on delete set null,
+  audio_asset_id uuid references public.media_assets(id) on delete set null,
+  instagram_caption text not null default '',
+  linkedin_caption text not null default '',
+  facebook_caption text not null default '',
+  platforms public.social_platform[] not null default '{}',
+  add_music boolean not null default false,
+  hide_like_count boolean not null default false,
+  also_post_to_facebook boolean not null default false,
+  timezone text not null default 'Asia/Kolkata',
+  scheduled_for timestamptz,
+  status public.post_status not null default 'draft',
+  checklist jsonb not null default '[]',
+  error_message text,
+  published_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists posts_workspace_scheduled_idx on public.posts (workspace_id, scheduled_for);
+create index if not exists posts_due_idx on public.posts (status, scheduled_for) where status in ('queued', 'scheduled');
+
+create table if not exists public.post_targets (
+  id uuid primary key default gen_random_uuid(),
+  post_id uuid not null references public.posts(id) on delete cascade,
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
+  platform public.social_platform not null,
+  status public.target_status not null default 'queued',
+  remote_post_id text,
+  post_url text,
+  error_message text,
+  attempt_count integer not null default 0,
+  last_attempt_at timestamptz,
+  published_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (post_id, platform)
+);
+create index if not exists post_targets_post_idx on public.post_targets (post_id, status);
+
+create or replace function public.set_updated_at()
+returns trigger language plpgsql as $$ begin new.updated_at = now(); return new; end; $$;
+
+drop trigger if exists workspaces_set_updated_at on public.workspaces;
+create trigger workspaces_set_updated_at before update on public.workspaces for each row execute function public.set_updated_at();
+drop trigger if exists social_accounts_set_updated_at on public.social_accounts;
+create trigger social_accounts_set_updated_at before update on public.social_accounts for each row execute function public.set_updated_at();
+drop trigger if exists posts_set_updated_at on public.posts;
+create trigger posts_set_updated_at before update on public.posts for each row execute function public.set_updated_at();
+drop trigger if exists post_targets_set_updated_at on public.post_targets;
+create trigger post_targets_set_updated_at before update on public.post_targets for each row execute function public.set_updated_at();
+
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.workspaces (owner_id, name)
+  values (new.id, coalesce(nullif(new.raw_user_meta_data->>'workspace_name', ''), 'My workspace'))
+  on conflict (owner_id) do nothing;
+  return new;
+end;
+$$;
+drop trigger if exists on_auth_user_created_postpilot on auth.users;
+create trigger on_auth_user_created_postpilot after insert on auth.users for each row execute procedure public.handle_new_user();
+
+create or replace function public.claim_due_posts(batch_size integer default 20)
+returns setof public.posts
+language plpgsql security definer set search_path = public as $$
+begin
+  return query
+  with due as (
+    select id from public.posts
+    where status in ('scheduled', 'queued') and (scheduled_for is null or scheduled_for <= now())
+    order by coalesce(scheduled_for, created_at) asc
+    limit greatest(1, least(batch_size, 100))
+    for update skip locked
+  )
+  update public.posts p set status = 'processing', updated_at = now()
+  from due where p.id = due.id
+  returning p.*;
+end;
+$$;
+revoke all on function public.claim_due_posts(integer) from public, anon, authenticated;
+grant execute on function public.claim_due_posts(integer) to service_role;
+
+create or replace function public.my_workspace_id()
+returns uuid language sql stable security definer set search_path = public as $$
+  select id from public.workspaces where owner_id = auth.uid() limit 1;
+$$;
+revoke all on function public.my_workspace_id() from public;
+grant execute on function public.my_workspace_id() to authenticated;
+
 alter table public.workspaces enable row level security;
 alter table public.social_accounts enable row level security;
 alter table public.media_assets enable row level security;
 alter table public.posts enable row level security;
 alter table public.post_targets enable row level security;
-create policy workspaces_owner on public.workspaces for all using (owner_id=auth.uid()) with check (owner_id=auth.uid());
-create policy social_accounts_workspace on public.social_accounts for all using (workspace_id in (select id from public.workspaces where owner_id=auth.uid())) with check (workspace_id in (select id from public.workspaces where owner_id=auth.uid()));
-create policy media_assets_workspace on public.media_assets for all using (workspace_id in (select id from public.workspaces where owner_id=auth.uid())) with check (workspace_id in (select id from public.workspaces where owner_id=auth.uid()));
-create policy posts_workspace on public.posts for all using (workspace_id in (select id from public.workspaces where owner_id=auth.uid())) with check (workspace_id in (select id from public.workspaces where owner_id=auth.uid()));
-create policy targets_workspace on public.post_targets for all using (post_id in (select p.id from public.posts p join public.workspaces w on w.id=p.workspace_id where w.owner_id=auth.uid())) with check (post_id in (select p.id from public.posts p join public.workspaces w on w.id=p.workspace_id where w.owner_id=auth.uid()));
-insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types) values('post-media','post-media',true,52428800,array['image/jpeg','image/png','audio/mpeg','video/mp4']) on conflict(id) do update set public=true;
-create policy post_media_user_upload on storage.objects for insert to authenticated with check (bucket_id='post-media' and (storage.foldername(name))[1]=auth.uid()::text);
-create policy post_media_public_read on storage.objects for select to public using (bucket_id='post-media');
-create policy post_media_user_delete on storage.objects for delete to authenticated using (bucket_id='post-media' and (storage.foldername(name))[1]=auth.uid()::text);
-grant execute on function public.claim_due_posts(integer) to service_role;
+
+drop policy if exists "owner reads workspace" on public.workspaces;
+create policy "owner reads workspace" on public.workspaces for select to authenticated using (owner_id = auth.uid());
+drop policy if exists "owner updates workspace" on public.workspaces;
+create policy "owner updates workspace" on public.workspaces for update to authenticated using (owner_id = auth.uid()) with check (owner_id = auth.uid());
+
+-- No authenticated SELECT policy on social_accounts: server service-role operations only.
+drop policy if exists "workspace media read" on public.media_assets;
+create policy "workspace media read" on public.media_assets for select to authenticated using (workspace_id = public.my_workspace_id());
+drop policy if exists "workspace media insert" on public.media_assets;
+
+drop policy if exists "workspace posts read" on public.posts;
+create policy "workspace posts read" on public.posts for select to authenticated using (workspace_id = public.my_workspace_id());
+drop policy if exists "workspace posts insert" on public.posts;
+drop policy if exists "workspace posts update" on public.posts;
+drop policy if exists "workspace posts delete" on public.posts;
+
+drop policy if exists "workspace targets read" on public.post_targets;
+create policy "workspace targets read" on public.post_targets for select to authenticated using (workspace_id = public.my_workspace_id());
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('post-media', 'post-media', true, 26214400, array['image/jpeg','image/png','audio/mpeg','video/mp4'])
+on conflict (id) do update set public = excluded.public, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "workspace upload path" on storage.objects;
+create policy "workspace upload path" on storage.objects for insert to authenticated
+with check (bucket_id = 'post-media' and (storage.foldername(name))[1] = public.my_workspace_id()::text);
+drop policy if exists "workspace updates media" on storage.objects;
+create policy "workspace updates media" on storage.objects for update to authenticated
+using (bucket_id = 'post-media' and (storage.foldername(name))[1] = public.my_workspace_id()::text)
+with check (bucket_id = 'post-media' and (storage.foldername(name))[1] = public.my_workspace_id()::text);
+drop policy if exists "workspace deletes media" on storage.objects;
+create policy "workspace deletes media" on storage.objects for delete to authenticated
+using (bucket_id = 'post-media' and (storage.foldername(name))[1] = public.my_workspace_id()::text);
