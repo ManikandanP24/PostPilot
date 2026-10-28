@@ -151,6 +151,33 @@ button { cursor: pointer; }
 .dark .nav-link:hover { background: #30285f; color: #d4d0ff; }
 .dark .status { background: #30285f; color: #d4d0ff; }
 
+
+/* Additional contrast fixes for Settings and Create Post in dark mode.
+   These utility classes were designed for light surfaces and need matching
+   dark variants when they appear inside dark cards. */
+.dark .card .bg-slate-100 {
+  background-color: #202c40;
+  color: #d4deed;
+}
+.dark .card .bg-slate-200 { background-color: #2a3850; }
+.dark .card .text-slate-900,
+.dark .card .text-slate-800,
+.dark .card .text-slate-700 { color: #e7ecf5; }
+.dark .card .text-slate-600 { color: #c4cede; }
+.dark .card .text-slate-500 { color: #b3bfd2; }
+.dark .card .text-slate-400 { color: #aab7cc; }
+.dark .card .text-violet-800 { color: #dedaff; }
+.dark .card .text-violet-900 { color: #e7e3ff; }
+.dark .card .border-slate-200,
+.dark .card .border-slate-300 { border-color: #39465e; }
+.dark .card .divide-slate-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #29364d;
+}
+.dark .card input::placeholder,
+.dark .card textarea::placeholder { color: #8593aa; opacity: 1; }
+.dark .card input[type="checkbox"],
+.dark .card input[type="radio"] { accent-color: #9a91ff; }
+
 @media (max-width: 850px) {
   .sidebar { display: none; }
   .topbar { padding: 0 16px; }
