@@ -104,14 +104,28 @@ export default function LoginPage() {
 
     try {
       const supabase = createSupabaseBrowserClient();
-      const { error: googleError } = await supabase.auth.signInWithOAuth({
+      const { data, error: googleError } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
           redirectTo: new URL("/auth/callback", window.location.origin).toString(),
+          // Handle a disabled provider inside PostPilot rather than navigating
+          // users to Supabase's raw JSON error response.
+          skipBrowserRedirect: true,
         },
       });
 
-      if (googleError) throw googleError;
+      if (googleError) {
+        if (/unsupported provider|provider is not enabled/i.test(googleError.message)) {
+          throw new Error("Google sign-in is not enabled in Supabase yet.");
+        }
+        throw googleError;
+      }
+
+      if (!data.url) {
+        throw new Error("Supabase did not return a Google sign-in URL. Check the Google provider configuration.");
+      }
+
+      window.location.assign(data.url);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not start Google sign-in.");
       setBusy(false);
@@ -145,9 +159,19 @@ export default function LoginPage() {
         )}
 
         {error && (
-          <p role="alert" className="mt-4 rounded-xl border border-rose-800 bg-rose-950/70 p-3 text-sm text-rose-100">
-            {error}
-          </p>
+          <div role="alert" className="mt-4 rounded-xl border border-rose-800 bg-rose-950/70 p-3 text-sm text-rose-100">
+            <p>{error}</p>
+            {error === "Google sign-in is not enabled in Supabase yet." && (
+              <a
+                className="mt-2 inline-block font-semibold text-violet-200 underline underline-offset-2 hover:text-white"
+                href="https://supabase.com/dashboard/project/gvkyotjapbtirrahirsk/auth/providers?provider=Google"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open Google provider settings
+              </a>
+            )}
+          </div>
         )}
         {notice && (
           <p role="status" className="mt-4 rounded-xl border border-emerald-800 bg-emerald-950/70 p-3 text-sm text-emerald-100">
