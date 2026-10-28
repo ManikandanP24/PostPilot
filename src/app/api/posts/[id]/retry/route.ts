@@ -7,6 +7,6 @@ export async function POST(_request:Request,{params}:{params:Promise<{id:string}
  const {data:targets,error:te}=await admin.from("post_targets").select("id,status").eq("post_id",id).eq("workspace_id",workspace.id);if(te)throw te;
  const failed=(targets||[]).filter(t=>t.status==="failed"||t.status==="queued"||t.status==="processing");for(const t of failed)await admin.from("post_targets").update({status:"queued",error_message:null}).eq("id",t.id);
  await admin.from("posts").update({status:"queued",error_message:null,updated_at:new Date().toISOString()}).eq("id",id);
- const result=await publishPostById(id);return NextResponse.json({...result,message:"Retry finished. Review status per platform."});
+ const result=await publishPostById(id,admin);return NextResponse.json({...result,message:"Retry finished. Review status per platform."});
  }catch(e){return apiError(e,(e instanceof Error&&e.message==="UNAUTHORIZED")?401:500)}
 }
