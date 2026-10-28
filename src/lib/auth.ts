@@ -7,13 +7,14 @@ export async function getAuthenticatedContext() {
 
   // Use the authenticated user's cookie-bound client for ordinary app operations.
   // Workspace RLS ensures this client can only operate on the current user's workspace.
-  let { data: workspace, error: workspaceError } = await supabase
+  const { data: initialWorkspace, error: workspaceError } = await supabase
     .from("workspaces")
     .select("id, owner_id, name, timezone")
     .eq("owner_id", user.id)
     .maybeSingle();
 
   if (workspaceError) throw workspaceError;
+  let workspace = initialWorkspace;
   if (!workspace) {
     const { data: created, error: createError } = await supabase
       .from("workspaces")
