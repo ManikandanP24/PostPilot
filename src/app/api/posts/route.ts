@@ -40,7 +40,7 @@ export async function POST(request:Request){
    checklist:input.hideLikeCount?[{id:"instagram-hide-like-count",done:false,text:"After publishing, open Instagram → post → … → Hide like count"}]:[]
   }).select("*").single();if(error)throw error;
   const {error:targetsError}=await admin.from("post_targets").insert(effective.map(platform=>({post_id:post.id,workspace_id:workspace.id,platform,status:"queued"})));if(targetsError){await admin.from("posts").delete().eq("id",post.id);throw targetsError}
-  if(input.publishNow){const result=await publishPostById(post.id);return NextResponse.json({...result,message:result.status==="published"?"Published successfully.":result.status==="partial"?"Post published to some platforms. Check each platform's result.":"Publish attempt finished. Review status and reconnect accounts if needed."},{status:result.status==="published"?201:202})}
+  if(input.publishNow){const result=await publishPostById(post.id, admin);return NextResponse.json({...result,message:result.status==="published"?"Published successfully.":result.status==="partial"?"Post published to some platforms. Check each platform's result.":"Publish attempt finished. Review status and reconnect accounts if needed."},{status:result.status==="published"?201:202})}
   return NextResponse.json({postId:post.id,status,message:"Post scheduled."},{status:201});
  }catch(e){return apiError(e,(e instanceof Error&&e.message==="UNAUTHORIZED")?401:500)}
 }
