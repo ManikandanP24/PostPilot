@@ -1,6 +1,10 @@
 -- PostPilot database schema. Run in Supabase SQL Editor as project owner.
 create extension if not exists pgcrypto;
 
+create schema if not exists private;
+revoke all on schema private from public;
+grant usage on schema private to authenticated;
+
 do $$ begin
   create type public.social_platform as enum ('instagram', 'facebook', 'linkedin');
 exception when duplicate_object then null; end $$;
@@ -101,9 +105,15 @@ create table if not exists public.post_targets (
   unique (post_id, platform)
 );
 create index if not exists post_targets_post_idx on public.post_targets (post_id, status);
+create index if not exists post_targets_workspace_idx on public.post_targets (workspace_id);
+create index if not exists media_assets_workspace_idx on public.media_assets (workspace_id);
+create index if not exists posts_created_by_idx on public.posts (created_by);
+create index if not exists posts_image_asset_idx on public.posts (image_asset_id);
+create index if not exists posts_video_asset_idx on public.posts (video_asset_id);
+create index if not exists posts_audio_asset_idx on public.posts (audio_asset_id);
 
 create or replace function public.set_updated_at()
-returns trigger language plpgsql as $$ begin new.updated_at = now(); return new; end; $$;
+returns trigger language plpgsql set search_path = pg_catalog as $ begin new.updated_at = now(); return new; end; $;
 
 drop trigger if exists workspaces_set_updated_at on public.workspaces;
 create trigger workspaces_set_updated_at before update on public.workspaces for each row execute function public.set_updated_at();
@@ -114,17 +124,18 @@ create trigger posts_set_updated_at before update on public.posts for each row e
 drop trigger if exists post_targets_set_updated_at on public.post_targets;
 create trigger post_targets_set_updated_at before update on public.post_targets for each row execute function public.set_updated_at();
 
-create or replace function public.handle_new_user()
-returns trigger language plpgsql security definer set search_path = public as $$
+create or replace function private.handle_new_user()
+returns trigger language plpgsql security definer set search_path = pg_catalog as $
 begin
   insert into public.workspaces (owner_id, name)
   values (new.id, coalesce(nullif(new.raw_user_meta_data->>'workspace_name', ''), 'My workspace'))
   on conflict (owner_id) do nothing;
   return new;
 end;
-$$;
+$;
+revoke all on function private.handle_new_user() from public, anon, authenticated;
 drop trigger if exists on_auth_user_created_postpilot on auth.users;
-create trigger on_auth_user_created_postpilot after insert on auth.users for each row execute procedure public.handle_new_user();
+create trigger on_auth_user_created_postpilot after insert on auth.users for each row execute procedure private.handle_new_user();
 
 create or replace function public.claim_due_posts(batch_size integer default 20)
 returns setof public.posts
@@ -146,12 +157,12 @@ $$;
 revoke all on function public.claim_due_posts(integer) from public, anon, authenticated;
 grant execute on function public.claim_due_posts(integer) to service_role;
 
-create or replace function public.my_workspace_id()
-returns uuid language sql stable security definer set search_path = public as $$
-  select id from public.workspaces where owner_id = auth.uid() limit 1;
-$$;
-revoke all on function public.my_workspace_id() from public;
-grant execute on function public.my_workspace_id() to authenticated;
+create or replace function private.my_workspace_id()
+returns uuid language sql stable security definer set search_path = pg_catalog as $
+  select id from public.workspaces where owner_id = (select auth.uid()) limit 1;
+$;
+revoke all on function private.my_workspace_id() from public, anon;
+grant execute on function private.my_workspace_id() to authenticated;
 
 alter table public.workspaces enable row level security;
 alter table public.social_accounts enable row level security;
@@ -160,23 +171,23 @@ alter table public.posts enable row level security;
 alter table public.post_targets enable row level security;
 
 drop policy if exists "owner reads workspace" on public.workspaces;
-create policy "owner reads workspace" on public.workspaces for select to authenticated using (owner_id = auth.uid());
+create policy "owner reads workspace" on public.workspaces for select to authenticated using (owner_id = (select auth.uid()));
 drop policy if exists "owner updates workspace" on public.workspaces;
-create policy "owner updates workspace" on public.workspaces for update to authenticated using (owner_id = auth.uid()) with check (owner_id = auth.uid());
+create policy "owner updates workspace" on public.workspaces for update to authenticated using (owner_id = (select auth.uid())) with check (owner_id = (select auth.uid()));
 
 -- No authenticated SELECT policy on social_accounts: server service-role operations only.
 drop policy if exists "workspace media read" on public.media_assets;
-create policy "workspace media read" on public.media_assets for select to authenticated using (workspace_id = public.my_workspace_id());
+create policy "workspace media read" on public.media_assets for select to authenticated using (workspace_id = private.my_workspace_id());
 drop policy if exists "workspace media insert" on public.media_assets;
 
 drop policy if exists "workspace posts read" on public.posts;
-create policy "workspace posts read" on public.posts for select to authenticated using (workspace_id = public.my_workspace_id());
+create policy "workspace posts read" on public.posts for select to authenticated using (workspace_id = private.my_workspace_id());
 drop policy if exists "workspace posts insert" on public.posts;
 drop policy if exists "workspace posts update" on public.posts;
 drop policy if exists "workspace posts delete" on public.posts;
 
 drop policy if exists "workspace targets read" on public.post_targets;
-create policy "workspace targets read" on public.post_targets for select to authenticated using (workspace_id = public.my_workspace_id());
+create policy "workspace targets read" on public.post_targets for select to authenticated using (workspace_id = private.my_workspace_id());
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('post-media', 'post-media', true, 26214400, array['image/jpeg','image/png','audio/mpeg','video/mp4'])
@@ -184,11 +195,11 @@ on conflict (id) do update set public = excluded.public, file_size_limit = exclu
 
 drop policy if exists "workspace upload path" on storage.objects;
 create policy "workspace upload path" on storage.objects for insert to authenticated
-with check (bucket_id = 'post-media' and (storage.foldername(name))[1] = public.my_workspace_id()::text);
+with check (bucket_id = 'post-media' and (storage.foldername(name))[1] = private.my_workspace_id()::text);
 drop policy if exists "workspace updates media" on storage.objects;
 create policy "workspace updates media" on storage.objects for update to authenticated
-using (bucket_id = 'post-media' and (storage.foldername(name))[1] = public.my_workspace_id()::text)
-with check (bucket_id = 'post-media' and (storage.foldername(name))[1] = public.my_workspace_id()::text);
+using (bucket_id = 'post-media' and (storage.foldername(name))[1] = private.my_workspace_id()::text)
+with check (bucket_id = 'post-media' and (storage.foldername(name))[1] = private.my_workspace_id()::text);
 drop policy if exists "workspace deletes media" on storage.objects;
 create policy "workspace deletes media" on storage.objects for delete to authenticated
-using (bucket_id = 'post-media' and (storage.foldername(name))[1] = public.my_workspace_id()::text);
+using (bucket_id = 'post-media' and (storage.foldername(name))[1] = private.my_workspace_id()::text);
