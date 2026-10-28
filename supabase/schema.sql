@@ -113,7 +113,7 @@ create index if not exists posts_video_asset_idx on public.posts (video_asset_id
 create index if not exists posts_audio_asset_idx on public.posts (audio_asset_id);
 
 create or replace function public.set_updated_at()
-returns trigger language plpgsql set search_path = pg_catalog as $ begin new.updated_at = now(); return new; end; $;
+returns trigger language plpgsql set search_path = pg_catalog as $$ begin new.updated_at = now(); return new; end; $$;
 
 drop trigger if exists workspaces_set_updated_at on public.workspaces;
 create trigger workspaces_set_updated_at before update on public.workspaces for each row execute function public.set_updated_at();
@@ -125,14 +125,14 @@ drop trigger if exists post_targets_set_updated_at on public.post_targets;
 create trigger post_targets_set_updated_at before update on public.post_targets for each row execute function public.set_updated_at();
 
 create or replace function private.handle_new_user()
-returns trigger language plpgsql security definer set search_path = pg_catalog as $
+returns trigger language plpgsql security definer set search_path = pg_catalog as $$
 begin
   insert into public.workspaces (owner_id, name)
   values (new.id, coalesce(nullif(new.raw_user_meta_data->>'workspace_name', ''), 'My workspace'))
   on conflict (owner_id) do nothing;
   return new;
 end;
-$;
+$$;
 revoke all on function private.handle_new_user() from public, anon, authenticated;
 drop trigger if exists on_auth_user_created_postpilot on auth.users;
 create trigger on_auth_user_created_postpilot after insert on auth.users for each row execute procedure private.handle_new_user();
@@ -158,9 +158,9 @@ revoke all on function public.claim_due_posts(integer) from public, anon, authen
 grant execute on function public.claim_due_posts(integer) to service_role;
 
 create or replace function private.my_workspace_id()
-returns uuid language sql stable security definer set search_path = pg_catalog as $
+returns uuid language sql stable security definer set search_path = pg_catalog as $$
   select id from public.workspaces where owner_id = (select auth.uid()) limit 1;
-$;
+$$;
 revoke all on function private.my_workspace_id() from public, anon;
 grant execute on function private.my_workspace_id() to authenticated;
 
@@ -175,19 +175,19 @@ create policy "owner reads workspace" on public.workspaces for select to authent
 drop policy if exists "owner updates workspace" on public.workspaces;
 create policy "owner updates workspace" on public.workspaces for update to authenticated using (owner_id = (select auth.uid())) with check (owner_id = (select auth.uid()));
 
--- No authenticated SELECT policy on social_accounts: server service-role operations only.
+-- Social account records are workspace-scoped; stored tokens are encrypted by the server.
 drop policy if exists "workspace media read" on public.media_assets;
-create policy "workspace media read" on public.media_assets for select to authenticated using (workspace_id = private.my_workspace_id());
+create policy "workspace media read" on public.media_assets for select to authenticated using (workspace_id = (select private.my_workspace_id()));
 drop policy if exists "workspace media insert" on public.media_assets;
 
 drop policy if exists "workspace posts read" on public.posts;
-create policy "workspace posts read" on public.posts for select to authenticated using (workspace_id = private.my_workspace_id());
+create policy "workspace posts read" on public.posts for select to authenticated using (workspace_id = (select private.my_workspace_id()));
 drop policy if exists "workspace posts insert" on public.posts;
 drop policy if exists "workspace posts update" on public.posts;
 drop policy if exists "workspace posts delete" on public.posts;
 
 drop policy if exists "workspace targets read" on public.post_targets;
-create policy "workspace targets read" on public.post_targets for select to authenticated using (workspace_id = private.my_workspace_id());
+create policy "workspace targets read" on public.post_targets for select to authenticated using (workspace_id = (select private.my_workspace_id()));
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('post-media', 'post-media', true, 26214400, array['image/jpeg','image/png','audio/mpeg','video/mp4'])
@@ -195,11 +195,85 @@ on conflict (id) do update set public = excluded.public, file_size_limit = exclu
 
 drop policy if exists "workspace upload path" on storage.objects;
 create policy "workspace upload path" on storage.objects for insert to authenticated
-with check (bucket_id = 'post-media' and (storage.foldername(name))[1] = private.my_workspace_id()::text);
+with check (bucket_id = 'post-media' and (storage.foldername(name))[1] = (select private.my_workspace_id())::text);
 drop policy if exists "workspace updates media" on storage.objects;
 create policy "workspace updates media" on storage.objects for update to authenticated
-using (bucket_id = 'post-media' and (storage.foldername(name))[1] = private.my_workspace_id()::text)
-with check (bucket_id = 'post-media' and (storage.foldername(name))[1] = private.my_workspace_id()::text);
+using (bucket_id = 'post-media' and (storage.foldername(name))[1] = (select private.my_workspace_id())::text)
+with check (bucket_id = 'post-media' and (storage.foldername(name))[1] = (select private.my_workspace_id())::text);
 drop policy if exists "workspace deletes media" on storage.objects;
 create policy "workspace deletes media" on storage.objects for delete to authenticated
-using (bucket_id = 'post-media' and (storage.foldername(name))[1] = private.my_workspace_id()::text);
+using (bucket_id = 'post-media' and (storage.foldername(name))[1] = (select private.my_workspace_id())::text);
+
+
+-- Workspace-scoped policies for the authenticated application.
+drop policy if exists "owner inserts workspace" on public.workspaces;
+create policy "owner inserts workspace" on public.workspaces
+for insert to authenticated with check (owner_id = (select auth.uid()));
+
+drop policy if exists "workspace social accounts read" on public.social_accounts;
+create policy "workspace social accounts read" on public.social_accounts
+for select to authenticated using (workspace_id = (select private.my_workspace_id()));
+drop policy if exists "workspace social accounts insert" on public.social_accounts;
+create policy "workspace social accounts insert" on public.social_accounts
+for insert to authenticated with check (workspace_id = (select private.my_workspace_id()));
+drop policy if exists "workspace social accounts update" on public.social_accounts;
+create policy "workspace social accounts update" on public.social_accounts
+for update to authenticated using (workspace_id = (select private.my_workspace_id()))
+with check (workspace_id = (select private.my_workspace_id()));
+drop policy if exists "workspace social accounts delete" on public.social_accounts;
+create policy "workspace social accounts delete" on public.social_accounts
+for delete to authenticated using (workspace_id = (select private.my_workspace_id()));
+
+drop policy if exists "workspace media read" on public.media_assets;
+create policy "workspace media read" on public.media_assets
+for select to authenticated using (workspace_id = (select private.my_workspace_id()));
+drop policy if exists "workspace media insert" on public.media_assets;
+create policy "workspace media insert" on public.media_assets
+for insert to authenticated with check (workspace_id = (select private.my_workspace_id()));
+drop policy if exists "workspace media update" on public.media_assets;
+create policy "workspace media update" on public.media_assets
+for update to authenticated using (workspace_id = (select private.my_workspace_id()))
+with check (workspace_id = (select private.my_workspace_id()));
+drop policy if exists "workspace media delete" on public.media_assets;
+create policy "workspace media delete" on public.media_assets
+for delete to authenticated using (workspace_id = (select private.my_workspace_id()));
+
+drop policy if exists "workspace posts read" on public.posts;
+create policy "workspace posts read" on public.posts
+for select to authenticated using (workspace_id = (select private.my_workspace_id()));
+drop policy if exists "workspace posts insert" on public.posts;
+create policy "workspace posts insert" on public.posts
+for insert to authenticated with check (
+  workspace_id = (select private.my_workspace_id())
+  and created_by = (select auth.uid())
+  and (image_asset_id is null or exists (select 1 from public.media_assets a where a.id = image_asset_id and a.workspace_id = (select private.my_workspace_id())))
+  and (video_asset_id is null or exists (select 1 from public.media_assets a where a.id = video_asset_id and a.workspace_id = (select private.my_workspace_id())))
+  and (audio_asset_id is null or exists (select 1 from public.media_assets a where a.id = audio_asset_id and a.workspace_id = (select private.my_workspace_id())))
+);
+drop policy if exists "workspace posts update" on public.posts;
+create policy "workspace posts update" on public.posts
+for update to authenticated using (workspace_id = (select private.my_workspace_id()))
+with check (workspace_id = (select private.my_workspace_id()));
+drop policy if exists "workspace posts delete" on public.posts;
+create policy "workspace posts delete" on public.posts
+for delete to authenticated using (workspace_id = (select private.my_workspace_id()));
+
+drop policy if exists "workspace targets read" on public.post_targets;
+create policy "workspace targets read" on public.post_targets
+for select to authenticated using (workspace_id = (select private.my_workspace_id()));
+drop policy if exists "workspace targets insert" on public.post_targets;
+create policy "workspace targets insert" on public.post_targets
+for insert to authenticated with check (
+  workspace_id = (select private.my_workspace_id())
+  and exists (select 1 from public.posts p where p.id = post_id and p.workspace_id = (select private.my_workspace_id()))
+);
+drop policy if exists "workspace targets update" on public.post_targets;
+create policy "workspace targets update" on public.post_targets
+for update to authenticated using (workspace_id = (select private.my_workspace_id()))
+with check (
+  workspace_id = (select private.my_workspace_id())
+  and exists (select 1 from public.posts p where p.id = post_id and p.workspace_id = (select private.my_workspace_id()))
+);
+drop policy if exists "workspace targets delete" on public.post_targets;
+create policy "workspace targets delete" on public.post_targets
+for delete to authenticated using (workspace_id = (select private.my_workspace_id()));
