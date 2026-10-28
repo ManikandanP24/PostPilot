@@ -1,4 +1,5 @@
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 
 type Platform = "instagram" | "facebook" | "linkedin";
@@ -15,7 +16,7 @@ async function fetchRetry(url:string,init:RequestInit={}):Promise<Response>{
 }
 function platformError(p:Platform,data:any,status:number){const msg=String(data?.error?.message||data?.message||data?.error_description||("HTTP "+status));if(status===401||status===403||Number(data?.error?.code)===190||/expired.*token|invalid.*token|access token/i.test(msg))return label(p)+" token expired or permissions changed. Reconnect the account in Settings.";return label(p)+": "+msg.slice(0,400)}
 async function graphPost(p:Platform,url:string,form:URLSearchParams){const r=await fetchRetry(url,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:form});const d=await r.json();if(!r.ok||d.error)throw new Error(platformError(p,d,r.status));return d}
-async function getToken(admin:ReturnType<typeof createSupabaseAdminClient>,account:Account):Promise<string>{
+async function getToken(admin:SupabaseClient,account:Account):Promise<string>{
  if(!account.access_token_enc)throw new Error(label(account.platform)+" is not connected. Reconnect the account in Settings.");
  let token=decryptSecret(account.access_token_enc);const expiry=account.token_expires_at?new Date(account.token_expires_at).getTime():null;const now=Date.now();if(!expiry)return token;
  if(account.platform==="linkedin"&&expiry<=now+60000){
@@ -69,8 +70,8 @@ async function publishLinkedIn(token:string,account:Account,post:any,image:Asset
  if(!create.ok)throw new Error(platformError("linkedin",data,create.status));const id=create.headers.get("x-restli-id")||data.id||"";
  return {remote_post_id:id,post_url:id?"https://www.linkedin.com/feed/update/"+id+"/":"https://www.linkedin.com/feed/"};
 }
-export async function publishPostById(postId:string){
- const admin=createSupabaseAdminClient();const {data:post,error:postError}=await admin.from("posts").select("*").eq("id",postId).single();
+export async function publishPostById(postId:string, client?:SupabaseClient){
+ const admin=client ?? createSupabaseAdminClient();const {data:post,error:postError}=await admin.from("posts").select("*").eq("id",postId).single();
  if(postError||!post)throw new Error("Post was not found.");
  const [{data:targets,error:targetError},{data:image,error:imageError}]=await Promise.all([admin.from("post_targets").select("*").eq("post_id",postId).order("created_at",{ascending:true}),admin.from("media_assets").select("*").eq("id",post.image_asset_id).single()]);
  if(targetError)throw targetError;if(imageError||!image)throw new Error("Post image is missing from Storage.");
